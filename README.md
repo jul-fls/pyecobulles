@@ -1,7 +1,7 @@
 # pyecobulles
 
 [![CI](https://github.com/jul-fls/pyecobulles/actions/workflows/ci.yml/badge.svg)](https://github.com/jul-fls/pyecobulles/actions/workflows/ci.yml)
-[![codecov](https://codecov.io/gh/jul-fls/pyecobulles/branch/main/graph/badge.svg)](https://codecov.io/gh/jul-fls/pyecobulles)
+[![codecov](https://codecov.io/gh/jul-fls/pyecobulles/branch/master/graph/badge.svg)](https://codecov.io/gh/jul-fls/pyecobulles)
 
 Async Python client for the Ecobulles cloud API.
 
