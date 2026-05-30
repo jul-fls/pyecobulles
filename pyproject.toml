@@ -1,0 +1,55 @@
+[build-system]
+requires = ["setuptools>=77.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pyecobulles"
+version = "0.1.0"
+description = "Async Python client for the Ecobulles cloud API"
+readme = "README.md"
+requires-python = ">=3.12"
+license = "Apache-2.0"
+authors = [
+  { name = "Julien", email = "jul-fls@users.noreply.github.com" },
+]
+dependencies = [
+  "aiohttp>=3.9",
+]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Framework :: AsyncIO",
+  "Intended Audience :: Developers",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Typing :: Typed",
+]
+
+[project.urls]
+Homepage = "https://github.com/jul-fls/ecobulles_api"
+Issues = "https://github.com/jul-fls/ecobulles_api/issues"
+Repository = "https://github.com/jul-fls/ecobulles_api"
+
+[tool.setuptools.packages.find]
+include = ["pyecobulles*"]
+
+[tool.setuptools.package-data]
+pyecobulles = ["py.typed"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+
+[tool.coverage.run]
+branch = true
+source = ["pyecobulles"]
+
+[tool.coverage.report]
+fail_under = 95
+show_missing = true
+skip_covered = true
+
+[tool.mypy]
+python_version = "3.13"
+strict = true
+ignore_missing_imports = true
+warn_return_any = false

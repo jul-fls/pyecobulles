@@ -1,0 +1,232 @@
+"""Tests for pyecobulles API request shaping."""
+
+from __future__ import annotations
+
+from datetime import datetime
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
+
+from aiohttp import ClientError
+import pytest
+
+from pyecobulles import EcobullesClient
+
+
+class _FakeResponse:
+    """Small async context manager standing in for aiohttp responses."""
+
+    def __init__(self, status: int, payload: dict | None = None, text: str = "") -> None:
+        self.status = status
+        self._payload = payload or {}
+        self._text = text
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb) -> None:
+        return None
+
+    async def json(self, content_type=None):
+        return self._payload
+
+    async def text(self) -> str:
+        return self._text
+
+
+@pytest.mark.asyncio
+async def test_usage_request_keeps_current_minute_in_stopdate() -> None:
+    """Do not force the API request to the previous closed hour."""
+    client = EcobullesClient(
+        session=object(), now_fn=lambda: datetime(2026, 5, 21, 0, 37, 42)
+    )
+    post = AsyncMock(
+        return_value={
+            "data": {
+                "infoconso": {
+                    "total_gas": 1,
+                    "total_eau": 2,
+                    "graph": [{"date": "2026-05-21 00:37:00"}],
+                }
+            }
+        }
+    )
+
+    with patch.object(client, "_post", post):
+        await client.get_total_water_and_co2_usage("eco-ref")
+
+    post.assert_awaited_once_with(
+        "getConsoBoiteItemAppFilter.php",
+        {
+            "eco_ref": "eco-ref",
+            "eau": "1",
+            "startdate": "2000-01-01 00:00:00",
+            "stopdate": "2026-05-21 00:37:42",
+        },
+    )
+
+
+def test_hash_password() -> None:
+    """Password hashing matches the legacy Ecobulles API expectation."""
+    assert (
+        EcobullesClient.hash_password("secret")
+        == "e5e9fa1ba31ecd1ae84f75caaa474f3a663f05f4"
+    )
+
+
+@pytest.mark.asyncio
+async def test_authenticate_success() -> None:
+    """Authentication returns normalized account metadata."""
+    client = EcobullesClient(session=object())
+    with patch.object(
+        client,
+        "get_login_payload",
+        AsyncMock(
+            return_value={
+                "status": 1,
+                "data": {
+                    "userid": "user-id",
+                    "eco_ref": "eco-ref",
+                    "conso": {"boite": {"name": " Test box "}},
+                },
+            }
+        ),
+    ):
+        assert await client.authenticate("user@example.com", "secret") == (
+            True,
+            "user-id",
+            "eco-ref",
+            "Test box",
+        )
+
+
+@pytest.mark.asyncio
+async def test_authenticate_failure() -> None:
+    """Authentication failure is normalized."""
+    client = EcobullesClient(session=object())
+    with patch.object(client, "get_login_payload", AsyncMock(return_value={"status": 0})):
+        assert await client.authenticate("user@example.com", "bad") == (
+            False,
+            None,
+            None,
+            None,
+        )
+
+
+@pytest.mark.asyncio
+async def test_authenticate_missing_payload() -> None:
+    """Missing authentication payload is treated as failed authentication."""
+    client = EcobullesClient(session=object())
+    with patch.object(client, "get_login_payload", AsyncMock(return_value=None)):
+        assert await client.authenticate("user@example.com", "bad") == (
+            False,
+            None,
+            None,
+            None,
+        )
+
+
+@pytest.mark.asyncio
+async def test_usage_request_handles_missing_payload() -> None:
+    """Missing usage payload returns no data."""
+    client = EcobullesClient(session=object())
+    with patch.object(client, "_post", AsyncMock(return_value=None)):
+        assert await client.get_total_water_and_co2_usage("eco-ref") is None
+
+
+@pytest.mark.asyncio
+async def test_usage_request_handles_empty_graph() -> None:
+    """Usage payloads without graph data still expose cumulative totals."""
+    client = EcobullesClient(session=object())
+    with patch.object(
+        client,
+        "_post",
+        AsyncMock(
+            return_value={
+                "data": {
+                    "infoconso": {
+                        "total_gas": "1500",
+                        "total_eau": "42",
+                        "graph": [],
+                    }
+                }
+            }
+        ),
+    ):
+        assert await client.get_total_water_and_co2_usage("eco-ref") == {
+            "total_gas": 1500,
+            "total_eau": 42,
+            "last_updated": None,
+        }
+
+
+@pytest.mark.asyncio
+async def test_post_requires_session() -> None:
+    """The API client needs an injected aiohttp session."""
+    client = EcobullesClient()
+    with pytest.raises(RuntimeError, match="requires an aiohttp session"):
+        await client._post("endpoint.php", {})
+
+
+@pytest.mark.asyncio
+async def test_post_wraps_client_errors() -> None:
+    """Aiohttp client errors are normalized."""
+    session = SimpleNamespace()
+    client = EcobullesClient(session=session)
+    with patch.object(
+        session,
+        "post",
+        side_effect=ClientError("network down"),
+        create=True,
+    ):
+        with pytest.raises(RuntimeError, match="Ecobulles request failed"):
+            await client._post("endpoint.php", {})
+
+
+@pytest.mark.asyncio
+async def test_post_returns_json_payload() -> None:
+    """Successful API requests return decoded JSON."""
+    session = SimpleNamespace()
+    session.post = lambda *args, **kwargs: _FakeResponse(200, {"status": 1})
+    client = EcobullesClient(session=session)
+
+    assert await client._post("endpoint.php", {"x": "y"}) == {"status": 1}
+
+
+@pytest.mark.asyncio
+async def test_post_returns_none_on_http_error() -> None:
+    """Non-200 API responses are treated as missing payloads."""
+    session = SimpleNamespace()
+    session.post = lambda *args, **kwargs: _FakeResponse(500, text="server exploded")
+    client = EcobullesClient(session=session)
+
+    assert await client._post("endpoint.php", {"x": "y"}) is None
+
+
+@pytest.mark.asyncio
+async def test_post_wraps_timeouts() -> None:
+    """Timeouts include endpoint context."""
+    session = SimpleNamespace()
+    session.post = lambda *args, **kwargs: (_ for _ in ()).throw(TimeoutError)
+    client = EcobullesClient(session=session)
+
+    with pytest.raises(TimeoutError, match="timed out"):
+        await client._post("endpoint.php", {})
+
+
+@pytest.mark.asyncio
+async def test_login_and_device_payload_requests() -> None:
+    """Helper methods shape their API requests."""
+    client = EcobullesClient(session=object())
+    with patch.object(client, "_post", AsyncMock(return_value={"status": 1})) as post:
+        assert await client.get_login_payload("user@example.com", "secret") == {
+            "status": 1
+        }
+        assert await client.get_device_info("eco-ref") == {"status": 1}
+
+    assert post.await_args_list[0].args[0] == "loginAppUserCo2.php"
+    login_payload = post.await_args_list[0].args[1]
+    assert login_payload["email"] == "user@example.com"
+    assert login_payload["password"] == EcobullesClient.hash_password("secret")
+    assert "registrationId" in login_payload
+    assert "sand" in login_payload
+    post.assert_any_await("getAppUserCo2.php", {"eco_ref": "eco-ref"})

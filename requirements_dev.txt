@@ -1,0 +1,6 @@
+aiohttp
+build
+mypy==2.1.0
+pytest
+pytest-asyncio
+pytest-cov
